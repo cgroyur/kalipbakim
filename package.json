@@ -1,0 +1,15 @@
+{
+  "name": "cmms-kalip-bakim",
+  "version": "15.0.0",
+  "description": "Kalip Bakim Yonetim Sistemi - CMMS v15",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
