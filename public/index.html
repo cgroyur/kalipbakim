@@ -141,19 +141,58 @@ var _React = React,
   useEffect = _React.useEffect,
   useRef = _React.useRef,
   useCallback = _React.useCallback;
-var LS = "cmms_v12";
-var persist = function persist(d) {
-  try {
-    localStorage.setItem(LS, JSON.stringify(d));
-  } catch (e) {}
+var LS = "cmms_v15_cache"; // Sadece offline cache için
+
+/* ─────────────────────────────────────────────────────
+   API KATMANI — tüm veri SQLite DB'de saklanır
+   localStorage sadece token + hızlı cache olarak kullanılır
+───────────────────────────────────────────────────── */
+var CMMS_TOKEN = localStorage.getItem("cmms_token") || null;
+
+var apiHeaders = function() {
+  return {
+    "Content-Type": "application/json",
+    "Authorization": CMMS_TOKEN ? "Bearer " + CMMS_TOKEN : ""
+  };
 };
-var hydrate = function hydrate() {
+
+var apiGet = async function(url) {
   try {
-    var d = localStorage.getItem(LS);
-    return d ? JSON.parse(d) : null;
-  } catch (_unused) {
-    return null;
-  }
+    var r = await fetch(url, { headers: apiHeaders() });
+    if (r.status === 401) { CMMS_TOKEN=null; localStorage.removeItem("cmms_token"); return null; }
+    return r.ok ? r.json() : null;
+  } catch(e) { return null; }
+};
+
+var apiPost = async function(url, body) {
+  try {
+    var r = await fetch(url, { method:"POST", headers:apiHeaders(), body:JSON.stringify(body) });
+    return r.ok ? r.json() : null;
+  } catch(e) { return null; }
+};
+
+// persist: API'ye kaydet + cache'i güncelle
+var _persistTimer = null;
+var persist = function persist(d) {
+  // Debounce: 2 saniye içinde tekrar çağrılırsa sadece sonuncusu gönderilir
+  clearTimeout(_persistTimer);
+  _persistTimer = setTimeout(async function() {
+    if (CMMS_TOKEN) {
+      try { await apiPost("/api/state", d); } catch(e) {}
+    }
+    // Cache: localStorage'a küçük bir özet yaz (token, son sayfa vb.)
+    try {
+      localStorage.setItem(LS + "_meta", JSON.stringify({
+        ts: Date.now(), moldCount: (d.molds||[]).length, woCount: (d.wos||[]).length
+      }));
+    } catch(e) {}
+  }, 2000);
+};
+
+// hydrate: API'den çek, yoksa null döndür (initApp demo veri kullanır)
+var hydrate = function hydrate() {
+  // Senkron dönmesi gerekiyor — API çağrısı App mount sonrası yapılıyor
+  return null;
 };
 var nowStr = function nowStr() {
   var d = new Date();
@@ -1950,9 +1989,25 @@ function App() {
     _useState0 = _slicedToArray(_useState9, 2),
     toast = _useState0[0],
     setToast = _useState0[1];
+  // API'den state yükle — ilk mount
+  useEffect(function() {
+    if (!CMMS_TOKEN) return;
+    apiGet("/api/state").then(function(state) {
+      if (state && state.molds && state.wos) {
+        setData(function(prev) {
+          return Object.assign({}, prev, state);
+        });
+      }
+    });
+  }, []); // eslint-disable-line
+
+  // State değişince API'ye kaydet (debounced persist)
   useEffect(function () {
     persist(data);
   }, [data]);
+
+  // Audit log'u API'ye de gönder
+  var _addAuditLogOrig = addAuditLog;
   var showToast = function showToast(msg) {
     var type = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : "success";
     setToast({
@@ -2014,6 +2069,8 @@ function App() {
     });
   }, [mut]);
   var addAuditLog = useCallback(function (entry) {
+    // DB audit log API'ye gönder
+    if(CMMS_TOKEN) { apiPost("/api/audit", entry).catch(function(){}); }
     return mut(function (d) {
       if (!d.auditLog) d.auditLog = [];
       d.auditLog.push(_objectSpread(_objectSpread({}, entry), {}, {
@@ -2054,6 +2111,7 @@ function App() {
     addUser: addUser,
     updUser: updUser,
     addAuditLog: addAuditLog,
+    setData: setData,
     openMold: setMoldModal,
     showToast: showToast
   };
@@ -2072,6 +2130,13 @@ function App() {
     page: page,
     setPage: setPage,
     onLogout: function onLogout() {
+      // API logout
+      if(CMMS_TOKEN) {
+        fetch("/api/logout",{method:"POST",headers:apiHeaders()}).catch(function(){});
+        CMMS_TOKEN=null;
+        localStorage.removeItem("cmms_token");
+        localStorage.removeItem(LS+"_state");
+      }
       setUser(null);
       setPage("dash");
     },
@@ -2157,169 +2222,78 @@ function pageTitle(r, p) {
   return ((_PT$r = PT[r]) === null || _PT$r === void 0 ? void 0 : _PT$r[p]) || "Panel";
 }
 function LoginScreen(_ref) {
-  var users = _ref.users,
-    onLogin = _ref.onLogin;
-  var _useState1 = useState(""),
-    _useState10 = _slicedToArray(_useState1, 2),
-    un = _useState10[0],
-    setUn = _useState10[1];
-  var _useState11 = useState(""),
-    _useState12 = _slicedToArray(_useState11, 2),
-    pw = _useState12[0],
-    setPw = _useState12[1];
-  var _useState13 = useState(""),
-    _useState14 = _slicedToArray(_useState13, 2),
-    err = _useState14[0],
-    setErr = _useState14[1];
-  var go = function go() {
-    var u = users.find(function (x) {
-      return x.user === un && x.pass === pw;
-    });
-    u ? onLogin(u) : setErr("Kullanıcı adı veya şifre hatalı");
-  };
-  var demos = [{
-    r: "admin",
-    u: "admin",
-    ico: "👔"
-  }, {
-    r: "leader",
-    u: "leader1",
-    ico: "👷"
-  }, {
-    r: "tech",
-    u: "tech1",
-    ico: "🔧"
-  }, {
-    r: "op",
-    u: "op1",
-    ico: "⚙️"
-  }];
-  return /*#__PURE__*/React.createElement("div", {
-    style: {
-      width: "100%",
-      height: "100vh",
-      background: "linear-gradient(135deg,#0f2044,#1a4080)",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      padding: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      background: "#fff",
-      borderRadius: 16,
-      padding: 36,
-      width: "100%",
-      maxWidth: 400,
-      boxShadow: "0 24px 64px rgba(0,0,0,.3)"
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      textAlign: "center",
-      marginBottom: 28
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 48,
-      marginBottom: 10
-    }
-  }, "\uD83C\uDFED"), /*#__PURE__*/React.createElement("h1", {
-    style: {
-      fontSize: 22,
-      fontWeight: 900,
-      color: "#0f2044"
-    }
-  }, "CMMS v12"), /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 11,
-      color: "#6b7fa3",
-      marginTop: 3
-    }
-  }, "Kal\u0131p Bak\u0131m Y\xF6netim Sistemi")), /*#__PURE__*/React.createElement("div", {
-    className: "form-group"
-  }, /*#__PURE__*/React.createElement("label", {
-    className: "form-label"
-  }, "Kullan\u0131c\u0131 Ad\u0131"), /*#__PURE__*/React.createElement("input", {
-    className: "form-input",
-    value: un,
-    onChange: function onChange(e) {
-      return setUn(e.target.value);
-    },
-    onKeyDown: function onKeyDown(e) {
-      return e.key === "Enter" && go();
-    },
-    autoFocus: true
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "form-group"
-  }, /*#__PURE__*/React.createElement("label", {
-    className: "form-label"
-  }, "\u015Eifre"), /*#__PURE__*/React.createElement("input", {
-    className: "form-input",
-    type: "password",
-    value: pw,
-    onChange: function onChange(e) {
-      return setPw(e.target.value);
-    },
-    onKeyDown: function onKeyDown(e) {
-      return e.key === "Enter" && go();
-    }
-  })), err && /*#__PURE__*/React.createElement("div", {
-    className: "alert-box alert-danger",
-    style: {
-      marginBottom: 10
-    }
-  }, err), /*#__PURE__*/React.createElement("button", {
-    className: "btn btn-primary",
-    style: {
-      width: "100%",
-      justifyContent: "center",
-      padding: "11px"
-    },
-    onClick: go
-  }, "Giri\u015F Yap"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 14,
-      background: "#f5f7fb",
-      borderRadius: 8,
-      padding: 10
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 9,
-      fontWeight: 800,
-      color: "#6b7fa3",
-      marginBottom: 6,
-      textTransform: "uppercase",
-      letterSpacing: .5
-    }
-  }, "Demo (\u015Fifre: 1234)"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "grid",
-      gridTemplateColumns: "1fr 1fr",
-      gap: 4
-    }
-  }, demos.map(function (d) {
-    return /*#__PURE__*/React.createElement("div", {
-      key: d.r,
-      onClick: function onClick() {
-        setUn(d.u);
-        setPw("1234");
-      },
-      style: {
-        fontSize: 10,
-        color: "#1565c0",
-        cursor: "pointer",
-        padding: "4px 6px",
-        borderRadius: 4,
-        background: "#fff",
-        border: "1px solid #e8edf2",
-        display: "flex",
-        gap: 4,
-        alignItems: "center"
+  var users = _ref.users, onLogin = _ref.onLogin;
+  var _s1=useState(""),_s2=_slicedToArray(_s1,2),un=_s2[0],setUn=_s2[1];
+  var _s3=useState(""),_s4=_slicedToArray(_s3,2),pw=_s4[0],setPw=_s4[1];
+  var _s5=useState(""),_s6=_slicedToArray(_s5,2),err=_s6[0],setErr=_s6[1];
+  var _s7=useState(false),_s8=_slicedToArray(_s7,2),loading=_s8[0],setLoading=_s8[1];
+  var _s9=useState(false),_s10=_slicedToArray(_s9,2),showPw=_s10[0],setShowPw=_s10[1];
+  var go=async function go(){
+    if(!un.trim()||!pw.trim()){setErr("Kullanıcı adı ve şifre giriniz.");return;}
+    setLoading(true);setErr("");
+    try {
+      var r=await fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:un.trim(),password:pw})});
+      var result=await r.json();
+      if(!r.ok){setLoading(false);setErr(result.error||"Giriş başarısız");return;}
+      // Token sakla
+      CMMS_TOKEN=result.token;
+      localStorage.setItem("cmms_token",result.token);
+      // API'den state çek
+      var state=await apiGet("/api/state");
+      if(state){
+        // State'i initApp'in yerine kullan — önce cache'e yaz
+        try{localStorage.setItem(LS+"_state",JSON.stringify(state));}catch(e){}
       }
-    }, /*#__PURE__*/React.createElement("span", null, d.ico), /*#__PURE__*/React.createElement("strong", null, d.u));
-  })))));
+      setLoading(false);
+      onLogin(result.user);
+    } catch(e) {
+      setLoading(false);
+      setErr("Sunucuya bağlanılamadı. Lütfen tekrar deneyin.");
+    }
+  };
+  return React.createElement("div",{style:{width:"100%",height:"100vh",background:"linear-gradient(135deg,#0f2044 0%,#1a3a6b 50%,#0f2044 100%)",display:"flex",alignItems:"center",justifyContent:"center",padding:16}},
+    React.createElement("div",{style:{background:"#fff",borderRadius:20,padding:"40px 36px",width:"100%",maxWidth:400,boxShadow:"0 32px 80px rgba(0,0,0,.35)"}},
+      React.createElement("div",{style:{textAlign:"center",marginBottom:32}},
+        React.createElement("div",{style:{fontSize:52,marginBottom:12}},"🏭"),
+        React.createElement("h1",{style:{fontSize:24,fontWeight:900,color:"#0f2044",margin:"0 0 6px"}},"CMMS v15"),
+        React.createElement("p",{style:{fontSize:12,color:"#6b7fa3",margin:0}},"Kalıp Bakım Yönetim Sistemi")
+      ),
+      React.createElement("div",{style:{marginBottom:16}},
+        React.createElement("label",{style:{display:"block",fontSize:12,fontWeight:700,color:"#0f2044",marginBottom:6}},"Kullanıcı Adı"),
+        React.createElement("input",{
+          style:{width:"100%",padding:"11px 14px",border:"2px solid #e8edf2",borderRadius:8,fontSize:14,outline:"none",boxSizing:"border-box",transition:"border .2s"},
+          value:un,autoFocus:true,
+          onFocus:function(e){e.target.style.borderColor="#1565c0"},
+          onBlur:function(e){e.target.style.borderColor="#e8edf2"},
+          onChange:function(e){return setUn(e.target.value);},
+          onKeyDown:function(e){return e.key==="Enter"&&go();}
+        })
+      ),
+      React.createElement("div",{style:{marginBottom:20,position:"relative"}},
+        React.createElement("label",{style:{display:"block",fontSize:12,fontWeight:700,color:"#0f2044",marginBottom:6}},"Şifre"),
+        React.createElement("input",{
+          style:{width:"100%",padding:"11px 40px 11px 14px",border:"2px solid #e8edf2",borderRadius:8,fontSize:14,outline:"none",boxSizing:"border-box",transition:"border .2s"},
+          type:showPw?"text":"password",value:pw,
+          onFocus:function(e){e.target.style.borderColor="#1565c0"},
+          onBlur:function(e){e.target.style.borderColor="#e8edf2"},
+          onChange:function(e){return setPw(e.target.value);},
+          onKeyDown:function(e){return e.key==="Enter"&&go();}
+        }),
+        React.createElement("button",{
+          type:"button",
+          onClick:function(){setShowPw(!showPw);},
+          style:{position:"absolute",right:12,top:32,background:"none",border:"none",cursor:"pointer",fontSize:16,color:"#9aa5b4",padding:2}
+        },showPw?"🙈":"👁")
+      ),
+      err&&React.createElement("div",{style:{background:"#ffebee",color:"#c62828",border:"1px solid #ffcdd2",borderRadius:8,padding:"10px 14px",fontSize:12,marginBottom:16,fontWeight:600}},err),
+      React.createElement("button",{
+        onClick:go,disabled:loading,
+        style:{width:"100%",padding:"13px 0",background:loading?"#6b7fa3":"#0f2044",color:"#fff",border:"none",borderRadius:8,fontSize:15,fontWeight:700,cursor:loading?"not-allowed":"pointer",transition:"background .2s",letterSpacing:.5}
+      },loading?"⏳ Giriş yapılıyor...":"Giriş Yap")
+    )
+  );
 }
+
 function Sidebar(_ref2) {
   var user = _ref2.user,
     page = _ref2.page,
@@ -2369,6 +2343,10 @@ function Sidebar(_ref2) {
       id: "audit",
       ico: "📋",
       l: "Denetim İzi"
+    }, {
+      id: "sysadmin",
+      ico: "⚙️",
+      l: "Sistem Yönetimi"
     }],
     leader: [{
       id: "dash",
@@ -2403,6 +2381,10 @@ function Sidebar(_ref2) {
       id: "audit",
       ico: "📋",
       l: "Denetim İzi"
+    }, {
+      id: "sysadmin",
+      ico: "⚙️",
+      l: "Sistem Yönetimi"
     }],
     op: [{
       id: "report",
@@ -2451,7 +2433,7 @@ function Sidebar(_ref2) {
       fontSize: 28,
       marginBottom: 6
     }
-  }, "\uD83C\uDFED"), /*#__PURE__*/React.createElement("h1", null, "CMMS v12"), /*#__PURE__*/React.createElement("p", null, "Kal\u0131p Bak\u0131m Sistemi")), /*#__PURE__*/React.createElement("div", {
+  }, "\uD83C\uDFED"), /*#__PURE__*/React.createElement("h1", null, "CMMS v15"), /*#__PURE__*/React.createElement("p", null, "Kal\u0131p Bak\u0131m Sistemi")), /*#__PURE__*/React.createElement("div", {
     style: {
       flex: 1,
       padding: "8px 8px",
@@ -3982,6 +3964,7 @@ function AdminPanel(_ref19) {
     updMold = _ref19.updMold,
     setMolds = _ref19.setMolds,
     deleteMold = _ref19.deleteMold,
+    deleteWO = _ref19.deleteWO,
     addUser = _ref19.addUser,
     updUser = _ref19.updUser,
     addAuditLog = _ref19.addAuditLog,
@@ -4849,6 +4832,24 @@ function AdminPanel(_ref19) {
   if (page === "audit") {
     return /*#__PURE__*/React.createElement(AuditTrailPage, {
       data: data
+    });
+  }
+  if (page === "sysadmin") {
+    return /*#__PURE__*/React.createElement(SysAdminPage, {
+      data: data, deleteWO: deleteWO, deleteMold: deleteMold,
+      addAuditLog: addAuditLog, user: user,
+      onReset: function(type) {
+        if(type==="wos") { mut(function(d){d.wos=[];}); }
+        else if(type==="molds") { mut(function(d){d.molds=DEMO_MOLDS;}); }
+        else if(type==="full") { mut(function(d){Object.assign(d,{molds:DEMO_MOLDS,wos:DEMO_WOS,auditLog:[]});}); }
+        else if(type==="auditlog") {
+          mut(function(d){d.auditLog=[];});
+          if(CMMS_TOKEN) apiPost("/api/system/reset",{type:"auditlog"}).catch(function(){});
+        }
+        else if(type==="pm_counters") { mut(function(d){d.molds=d.molds.map(function(m){return Object.assign({},m,{pm_counter:0,last_pm_date:nowStr()});});}); }
+        // Cache temizle
+        try{localStorage.removeItem(LS+"_state");localStorage.removeItem(LS+"_meta");}catch(e){}
+      }
     });
   }
   if (page === "spareparts") {
@@ -15606,6 +15607,205 @@ function WODeleteModal(_ref78) {
     onClick: doDelete
   }, "\uD83D\uDDD1 Sil ve Bildir"))));
 }
+
+/* ════════════════════════════════════════════════════════════════
+   SİSTEM YÖNETİMİ SAYFASI — Sadece Admin
+   Toplu silme, parametre sıfırlama, depolama yönetimi
+════════════════════════════════════════════════════════════════ */
+function SysAdminPage(_ref) {
+  var data = _ref.data, deleteWO = _ref.deleteWO, deleteMold = _ref.deleteMold,
+      addAuditLog = _ref.addAuditLog, user = _ref.user, onReset = _ref.onReset;
+  var molds = data.molds, wos = data.wos;
+
+  var _sc1=useState(""),_sc2=_slicedToArray(_sc1,2),confirm=_sc2[0],setConfirm=_sc2[1];
+  var _sc3=useState(null),_sc4=_slicedToArray(_sc3,2),activeAction=_sc4[0],setActiveAction=_sc4[1];
+  var _sc5=useState([]),_sc6=_slicedToArray(_sc5,2),selWOs=_sc6[0],setSelWOs=_sc6[1];
+  var _sc7=useState("all"),_sc8=_slicedToArray(_sc7,2),woFilter=_sc8[0],setWoFilter=_sc8[1];
+
+  // localStorage kullanım
+  var _si1=useState(null),_si2=_slicedToArray(_si1,2),sysInfo=_si2[0],setSysInfo=_si2[1];
+  useEffect(function(){
+    apiGet("/api/system/info").then(function(info){ if(info) setSysInfo(info); });
+  },[]);
+
+  var lsInfo = React.useMemo(function() {
+    try {
+      var total = 0, keys = [];
+      for(var k in localStorage) {
+        if(localStorage.hasOwnProperty(k)) { var v = (localStorage.getItem(k)||""); total += v.length; keys.push({k:k,size:Math.round(v.length/1024*10)/10}); }
+      }
+      return { total: Math.round(total/1024), keys: keys.sort(function(a,b){return b.size-a.size;}).slice(0,10) };
+    } catch(e) { return {total:0,keys:[]}; }
+  }, []);
+
+  var LIMIT_KB = 5120; // ~5MB tarayıcı limiti
+
+  // İş emri filtreleme
+  var filteredWOs = React.useMemo(function() {
+    if(woFilter==="all") return wos;
+    return wos.filter(function(w){ return w.status===woFilter; });
+  }, [wos, woFilter]);
+
+  var doAction = function(type, label, action) {
+    if(confirm !== label) { setConfirm(label); setActiveAction(type); return; }
+    action();
+    setConfirm(""); setActiveAction(null);
+    addAuditLog && addAuditLog({
+      user_id: user&&user.id||"admin", user_name: user&&user.name||"Admin",
+      role:"admin", action:"Sistem Sıfırlama",
+      entity_type:"system", entity_id:type,
+      detail: label + " işlemi gerçekleştirildi"
+    });
+  };
+
+  var deleteSelectedWOs = function() {
+    if(!selWOs.length){alert("İş emri seçiniz!");return;}
+    if(!window.confirm(selWOs.length+" iş emrini silmek istediğinizden emin misiniz?"))return;
+    selWOs.forEach(function(id){ deleteWO(id); });
+    addAuditLog && addAuditLog({
+      user_id: user&&user.id||"admin", user_name: user&&user.name||"Admin",
+      role:"admin", action:"Toplu İş Emri Silindi",
+      entity_type:"wo", entity_id:selWOs.join(","),
+      detail: selWOs.length+" iş emri toplu olarak silindi"
+    });
+    setSelWOs([]);
+  };
+
+  var BtnDanger = function(p) {
+    var isConf = confirm===p.label && activeAction===p.type;
+    return React.createElement("button", {
+      onClick: function(){ doAction(p.type, p.label, p.action); },
+      style:{background:isConf?"#c62828":"#fff",color:isConf?"#fff":"#c62828",border:"2px solid #c62828",
+             borderRadius:8,padding:"10px 18px",fontWeight:700,fontSize:12,cursor:"pointer",transition:"all .2s",marginRight:8,marginBottom:8}
+    }, isConf ? "⚠ Onaylamak için tekrar tıkla" : p.label);
+  };
+
+  var pct = Math.min(100, Math.round(lsInfo.total / LIMIT_KB * 100));
+  var pctColor = pct>80?"#c62828":pct>60?"#e65100":"#1a6b3c";
+
+  return React.createElement("div", {className:"anim"},
+
+    // ── DEPOLAMA DURUMU ──
+    React.createElement("div", {className:"card", style:{marginBottom:16}},
+      React.createElement("div", {style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}},
+        React.createElement("div", {style:{fontWeight:800,fontSize:14,color:"#0f2044"}}, "💾 localStorage Durumu"),
+        React.createElement("span", {style:{fontSize:12,color:pctColor,fontWeight:700}}, lsInfo.total+" KB / "+LIMIT_KB+" KB (%"+pct+")")
+      ),
+      React.createElement("div", {style:{background:"#e8edf2",borderRadius:6,height:10,marginBottom:12}},
+        React.createElement("div", {style:{height:"100%",width:pct+"%",background:pctColor,borderRadius:6,transition:"width .5s"}})
+      ),
+      React.createElement("div", {style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:8}},
+        lsInfo.keys.map(function(item) {
+          return React.createElement("div", {key:item.k, style:{background:"#f5f7fb",borderRadius:6,padding:"6px 10px",fontSize:10}},
+            React.createElement("div", {style:{fontFamily:"monospace",color:"#0f2044",wordBreak:"break-all"}},"🔑 "+item.k),
+            React.createElement("div", {style:{color:"#6b7fa3",marginTop:2}},item.size+" KB")
+          );
+        })
+      ),
+      React.createElement("div", {style:{marginTop:12,display:"flex",gap:8,flexWrap:"wrap"}},
+        React.createElement("button", {
+          onClick:function(){
+            if(window.confirm("localStorage'ı tamamen temizlemek istiyor musunuz? Sayfa yenilenecek.")) {
+              localStorage.clear(); location.reload();
+            }
+          },
+          style:{background:"#fff",color:"#c62828",border:"1px solid #c62828",borderRadius:6,padding:"6px 14px",fontSize:11,fontWeight:700,cursor:"pointer"}
+        },"🗑 localStorage Temizle & Yeniden Başlat"),
+        React.createElement("span",{style:{fontSize:10,color:"#9aa5b4",alignSelf:"center"}},
+          "⚠ Bu işlem tüm veriyi siler — dikkatli kullanın")
+      )
+    ),
+
+    // ── ÖZET İSTATİSTİK ──
+    React.createElement("div", {style:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,marginBottom:16}},
+      [{ico:"🏭",l:"Toplam Kalıp",v:molds.length,c:"#0f2044"},
+       {ico:"📋",l:"Toplam İş Emri",v:wos.length,c:"#1565c0"},
+       {ico:"🔴",l:"Beklemede",v:wos.filter(function(w){return w.status==="BEKLEMEDE";}).length,c:"#e65100"},
+       {ico:"✅",l:"Kapatıldı",v:wos.filter(function(w){return w.status==="KAPATILDI";}).length,c:"#1a6b3c"},
+       {ico:"📋",l:"DB Audit Kaydı",v:sysInfo?sysInfo.audit_entries:(data.auditLog||[]).length,c:"#7b1fa2"},
+       {ico:"💾",l:"DB Boyutu",v:sysInfo?(sysInfo.db_size_kb+" KB"):"...",c:"#006064"},
+       {ico:"🟢",l:"Sunucu Çalışma",v:sysInfo?(Math.round(sysInfo.uptime_sec/60)+" dk"):"...",c:"#1a6b3c"},
+      ].map(function(s){
+        return React.createElement("div",{key:s.l,style:{background:"#fff",border:"1px solid #e8edf2",borderRadius:10,padding:"12px 14px",borderLeft:"4px solid "+s.c}},
+          React.createElement("div",{style:{fontSize:20,marginBottom:4}},s.ico),
+          React.createElement("div",{style:{fontSize:22,fontWeight:900,color:s.c}}),
+          React.createElement("div",{style:{fontSize:22,fontWeight:900,color:s.c}},s.v),
+          React.createElement("div",{style:{fontSize:10,color:"#6b7fa3",marginTop:2}},s.l)
+        );
+      })
+    ),
+
+    // ── TOPLU İŞ EMRİ SİLME ──
+    React.createElement("div", {className:"card", style:{marginBottom:16}},
+      React.createElement("div",{style:{fontWeight:800,fontSize:14,color:"#0f2044",marginBottom:12}},"📋 Toplu İş Emri Yönetimi"),
+      React.createElement("div",{style:{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}},
+        React.createElement("select",{className:"form-input",style:{width:200},value:woFilter,onChange:function(e){setWoFilter(e.target.value);setSelWOs([]);}},
+          React.createElement("option",{value:"all"},"Tüm İş Emirleri ("+wos.length+")"),
+          React.createElement("option",{value:"BEKLEMEDE"},"Beklemede"),
+          React.createElement("option",{value:"KAPATILDI"},"Kapatıldı"),
+          React.createElement("option",{value:"DEVAM_EDİYOR"},"Devam Ediyor"),
+          React.createElement("option",{value:"BEKLEMEYE_ALINDI"},"Beklemeye Alındı")
+        ),
+        React.createElement("button",{
+          className:"btn btn-ghost btn-sm",
+          onClick:function(){setSelWOs(selWOs.length===filteredWOs.length?[]:filteredWOs.map(function(w){return w.id;}));}
+        }, selWOs.length===filteredWOs.length?"Seçimi Kaldır":"Tümünü Seç"),
+        selWOs.length>0 && React.createElement("button",{
+          onClick:deleteSelectedWOs,
+          style:{background:"#c62828",color:"#fff",border:"none",borderRadius:6,padding:"7px 16px",fontWeight:700,fontSize:12,cursor:"pointer"}
+        },"🗑 Seçili "+selWOs.length+" Emri Sil")
+      ),
+      React.createElement("div",{style:{maxHeight:300,overflowY:"auto",border:"1px solid #e8edf2",borderRadius:8}},
+        React.createElement("table",{style:{width:"100%",borderCollapse:"collapse",fontSize:11}},
+          React.createElement("thead",null,
+            React.createElement("tr",{style:{background:"#f5f7fb"}},
+              React.createElement("th",{style:{padding:"8px 10px",textAlign:"left",width:30}},
+                React.createElement("input",{type:"checkbox",checked:selWOs.length===filteredWOs.length&&filteredWOs.length>0,
+                  onChange:function(){setSelWOs(selWOs.length===filteredWOs.length?[]:filteredWOs.map(function(w){return w.id;}));}})),
+              ["İş No","Kalıp","Tip","Durum","Tarih"].map(function(h){return React.createElement("th",{key:h,style:{padding:"8px 10px",textAlign:"left",color:"#0f2044",fontWeight:700}},h);})
+            )
+          ),
+          React.createElement("tbody",null,
+            filteredWOs.map(function(wo,i){
+              var sel = selWOs.indexOf(wo.id)>=0;
+              return React.createElement("tr",{key:wo.id,style:{background:sel?"#fff8f8":i%2===0?"#fff":"#fafbfc",borderBottom:"1px solid #f0f0f0"}},
+                React.createElement("td",{style:{padding:"7px 10px"}},
+                  React.createElement("input",{type:"checkbox",checked:sel,
+                    onChange:function(){setSelWOs(sel?selWOs.filter(function(id){return id!==wo.id;}):[...selWOs,wo.id]);}})),
+                React.createElement("td",{style:{padding:"7px 10px",fontWeight:700,color:"#0f2044"}},wo.id),
+                React.createElement("td",{style:{padding:"7px 10px",color:"#6b7fa3"}},wo.mold_id),
+                React.createElement("td",{style:{padding:"7px 10px"}},wo.type),
+                React.createElement("td",{style:{padding:"7px 10px",color:wo.status==="KAPATILDI"?"#1a6b3c":wo.status==="BEKLEMEDE"?"#e65100":"#1565c0"}},wo.status),
+                React.createElement("td",{style:{padding:"7px 10px",color:"#9aa5b4",fontSize:9}},wo.created_at)
+              );
+            })
+          )
+        )
+      )
+    ),
+
+    // ── TEHLİKELİ OPERASYONLAR ──
+    React.createElement("div",{className:"card",style:{border:"2px solid #ffcdd2"}},
+      React.createElement("div",{style:{fontWeight:800,fontSize:14,color:"#c62828",marginBottom:4}},"⚠️ Tehlikeli Operasyonlar"),
+      React.createElement("div",{style:{fontSize:11,color:"#9aa5b4",marginBottom:16}},"Bu işlemler geri alınamaz. Her buton iki kez tıklanarak onaylanır."),
+      React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:0}},
+        React.createElement(BtnDanger,{type:"wos",label:"Tüm İş Emirlerini Sil",action:function(){onReset("wos");}}),
+        React.createElement(BtnDanger,{type:"molds_reset",label:"Kalıp PM Sayaçlarını Sıfırla",action:function(){
+          molds.forEach(function(m){
+            if(m.pm_counter>0) { /* updMold çağrısı yerine onReset içinde */ }
+          });
+          onReset("pm_counters");
+        }}),
+        React.createElement(BtnDanger,{type:"auditlog",label:"Denetim İzini Temizle",action:function(){onReset("auditlog");}}),
+        React.createElement(BtnDanger,{type:"full",label:"Sistemi Demo Verisine Sıfırla",action:function(){onReset("full");}})
+      ),
+      confirm && React.createElement("div",{style:{background:"#fff8f8",border:"1px solid #ffcdd2",borderRadius:8,padding:"10px 14px",marginTop:8,fontSize:11,color:"#c62828",fontWeight:700}},
+        "⚠ \""+confirm+"\" işlemi için tekrar tıklayın — BU İŞLEM GERİ ALINAMAZ"
+      )
+    )
+  );
+}
+
 ReactDOM.createRoot(document.getElementById("root")).render(/*#__PURE__*/React.createElement(App, null));
 
 </script>

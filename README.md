@@ -1,38 +1,55 @@
 # CMMS v15 — Kalıp Bakım Yönetim Sistemi
+## Çok Kullanıcılı, Render.com Deployment
 
-Enjeksiyon kalıp atölyeleri için web tabanlı bakım yönetim sistemi.
+---
 
-## Render.com Deployment — Adım Adım
+## Proje Yapısı
 
-### 1. GitHub'a Yükle
+```
+cmms-render/
+├── server.js          ← Express + SQLite backend
+├── package.json
+├── render.yaml        ← Render.com konfigürasyonu
+├── .gitignore
+└── public/
+    └── index.html     ← React frontend (tek dosya)
+```
 
+---
+
+## GitHub → Render Deploy Adımları
+
+### 1. GitHub'a yükle
 ```bash
+cd cmms-render
 git init
 git add .
-git commit -m "CMMS v15 initial"
-git remote add origin https://github.com/KULLANICI/cmms-v15.git
+git commit -m "CMMS v15 initial deploy"
+git branch -M main
+git remote add origin https://github.com/KULLANICI_ADI/cmms-v15.git
 git push -u origin main
 ```
 
-### 2. Render.com'da Servis Oluştur
+### 2. Render.com'da servis oluştur
+1. [render.com](https://render.com) → New → **Web Service**
+2. GitHub reposunu seç
+3. Ayarlar otomatik algılanır (render.yaml'dan)
+4. **Environment Variables** bölümünde `JWT_SECRET` otomatik üretilir
+5. **Create Web Service** tıkla → ~3 dakika
 
-1. [render.com](https://render.com) → **New** → **Web Service**
-2. GitHub reponuzu bağlayın
-3. Ayarlar:
-   - **Name:** `cmms-kalip-bakim`
-   - **Runtime:** `Node`
-   - **Build Command:** `npm install`
-   - **Start Command:** `node server.js`
-   - **Instance Type:** `Free` (başlangıç için yeterli)
-4. **Create Web Service** butonuna tıklayın
-5. Deployment otomatik başlar (~2 dakika)
-6. Verilen URL ile sisteme erişin
+### 3. Persistent Disk (Önemli!)
+render.yaml içinde `disk` tanımlı:
+- Mount path: `/data`
+- DB burada saklanır, restart'larda kaybolmaz
+- Disk ücreti: ~$0.25/GB/ay (1 GB = $0.25/ay)
 
-### Demo Giriş Bilgileri
+---
 
-| Kullanıcı Adı | Şifre | Rol |
+## Giriş Bilgileri (İlk Kurulum)
+
+| Kullanıcı | Şifre | Rol |
 |---|---|---|
-| admin | 1234 | Admin |
+| admin | **admin123** | Admin |
 | leader1 | 1234 | Lider |
 | tech1 | 1234 | Teknisyen |
 | tech2 | 1234 | Teknisyen |
@@ -40,19 +57,37 @@ git push -u origin main
 | op1 | 1234 | Operatör |
 | op2 | 1234 | Operatör |
 
-## Teknik Bilgiler
+> **İlk girişte admin şifresini değiştirin:** Admin → Kullanıcılar → admin → Düzenle
 
-- **Frontend:** React 18 (CDN), pre-compiled JS
-- **Backend:** Express.js (statik dosya sunucusu)
-- **Veri saklama:** localStorage (tarayıcı bazlı)
-- **Bağımlılık:** Sadece `express`
+---
 
-## Önemli Not
+## Veri Saklama
 
-Sistem localStorage kullandığı için her kullanıcı kendi tarayıcısında bağımsız veri görür.
-Çok kullanıcılı gerçek ortam için backend + veritabanı entegrasyonu gerekir.
+| Nerede | Ne |
+|---|---|
+| SQLite DB (`/data/cmms.db`) | Kullanıcılar, tüm uygulama verisi, audit log |
+| localStorage (tarayıcı) | JWT token, küçük meta cache |
+
+localStorage artık **sınır sorunu yok** — tüm veri sunucuda.
+
+---
+
+## Güvenlik Notları
+
+- JWT token 12 saat geçerli
+- Şifreler bcrypt ile hash'leniyor (10 round)
+- `JWT_SECRET` Render'da otomatik üretilir
+- Admin şifresini ilk girişte değiştirin
+- HTTPS Render tarafından otomatik sağlanır
+
+---
 
 ## Güncelleme
 
-`public/index.html` dosyasını yeni versiyonla değiştirip GitHub'a push edin.
-Render otomatik yeniden deploy eder.
+```bash
+# Değişiklik yapın, sonra:
+git add .
+git commit -m "güncelleme açıklaması"
+git push
+# Render otomatik yeniden deploy eder
+```
